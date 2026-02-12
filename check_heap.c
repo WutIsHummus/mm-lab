@@ -11,47 +11,43 @@ int check_heap() {
     return HEAP_SUCCESS;
 }
 
-/*
- * STUDENT TODO: set these variables according to your heap design (tests will fail if you do not
- * set these variables!)
- *    - order:      how is your free list ordered?
- *    - circular:   true if your free list is circular; false otherwise
- */
-heap_order order = ORD_SIZE;
+heap_order order = ORD_MEM;
 bool circular = false;
 
 
-/*
- * get_bin_size - used to count the number of free blocks in a bin
- *
- * STUDENT TODO: this function is required to be completed for checkpoint 1
- *       - Ensure that each free block in the current bin is counted
- * 
- * Should return the number of free blocks in the current bin.
-*/
-int get_bin_size(size_t bin_idx) {   
-    // Student TODO
-    return 0;
+int get_bin_size(size_t binIdx) {
+    int count = 0;
+    for (mem_block_header_t *curr = free_heads[binIdx]; curr != NULL; curr = curr->next)
+        count++;
+    return count;
 }
 
 /*
- * check_bin -  used to check that the heap is still in a consistent state.
- * 
- * STUDENT TODO: this function is required to be completed for checkpoint 1
- * 
- *      - Ensure that the free block list is in the order you expect it to be in
- *        (if your list is randomly ordered, this check is not required).
- * 
- *      - Check if any free blocks overlap with each other. 
- * 
- *      - Ensure that each free block is aligned.
- * 
- *      - Ensure that all blocks on the free list are free (no implicit free lists)
- *
- * Should return HEAP_SUCCESS if the heap is consistent or HEAP_FAILURE if an error 
- * is detected.
+ * check_bin - validates consistency of a single free-list bin.
+ *   - Address ordering
+ *   - No overlapping blocks
+ *   - All blocks aligned
+ *   - All blocks marked free
  */
-int check_bin(mem_block_header_t *free_head) {
-    // Student TODO
+int check_bin(mem_block_header_t *freeHead) {
+    mem_block_header_t *prev = NULL;
+    for (mem_block_header_t *curr = freeHead; curr != NULL; curr = curr->next) {
+        /* Alignment check */
+        if ((uintptr_t)curr % ALIGNMENT != 0) return HEAP_FAILURE;
+
+        /* Must be free */
+        if (isAllocated(curr)) return HEAP_FAILURE;
+
+        /* Address ordering */
+        if (prev != NULL && prev >= curr) return HEAP_FAILURE;
+
+        /* No overlap*/
+        if (prev != NULL) {
+            char *prevEnd = (char *)prev + getSize(prev);
+            if (prevEnd > (char *)curr) return HEAP_FAILURE;
+        }
+
+        prev = curr;
+    }
     return HEAP_SUCCESS;
 }

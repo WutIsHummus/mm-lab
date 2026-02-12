@@ -4,7 +4,7 @@
 #include <assert.h>
 #include "ansicolors.h"
 
-const char author[] = ANSI_BOLD ANSI_COLOR_RED "REPLACE WITH YOUR NAME AND UT EID" ANSI_RESET;
+const char author[] = ANSI_BOLD ANSI_COLOR_RED "Alperen Aydin aa95287" ANSI_RESET;
 
 mem_block_header_t *free_heads[BIN_COUNT];
 size_t bin_limits[BIN_COUNT - 1];
@@ -22,6 +22,11 @@ bool is_allocated(mem_block_header_t *block) {
     return block->block_metadata & 0x1;
 }
 
+
+static size_t calcSize(size_t size) {
+    size_t total_size = size + sizeof(mem_block_header_t) ;
+    return total_size + (ALIGNMENT - (total_size % ALIGNMENT)) % ALIGNMENT;
+}
 /*
  * allocate - marks a block as allocated.
  */
@@ -37,6 +42,18 @@ void deallocate(mem_block_header_t *block) {
     assert(block != NULL);
     block->block_metadata &= ~0x1;
 }
+
+
+size_t getSize(const mem_block_header_t *block) {
+    assert(block != NULL);
+    return block->block_metadata & ~(ALIGNMENT - 1);
+}
+
+bool isAllocated(const mem_block_header_t *block) {
+    assert(block != NULL);
+    return block->block_metadata & 0x1;
+}
+
 
 /*
  * get_size - gets the size of the block.
@@ -89,7 +106,18 @@ void set_block_metadata(mem_block_header_t *block, size_t size, bool alloc) {
  * find - finds a free block that can satisfy the umalloc request.
  */
 mem_block_header_t *find(size_t total_size) {
-	// Optional Student TODO
+	size_t bin = select_bin(total_size);
+
+    for (size_t i = bin; i < BIN_COUNT; i++) {
+        mem_block_header_t *curr = free_heads[i];
+        while (curr != NULL) {
+            if (get_size(curr) >= total_size) {
+                return curr;
+            }
+            curr = curr->next;
+        }
+    }
+
 	return NULL;
 }
 
@@ -97,16 +125,72 @@ mem_block_header_t *find(size_t total_size) {
  * extend - extends the heap if more memory is required.
  */
 mem_block_header_t *extend(size_t size) {
-    // Optional Student TODO
-	return NULL;
+    size_t alloc_size = size > PAGESIZE ? size : PAGESIZE;
+    alloc_size = ((alloc_size + PAGESIZE - 1) / PAGESIZE) * PAGESIZE;
+
+    mem_block_header_t *new_block = csbrk(alloc_size);
+    if (new_block == NULL) {    
+        return NULL;
+    }
+
+    new_block->block_metadata = alloc_size;
+    new_block->next = NULL;
+    new_block->prev = NULL;
+
+    size_t bin = select_bin(alloc_size);
+    mem_block_header_t *curr = free_heads[bin];
+    mem_block_header_t *prev = NULL;
+
+    while (curr != NULL && curr < new_block) {
+        prev = curr;
+        curr = curr->next;
+    }
+
+    new_block->next = curr;
+    new_block->prev = prev;
+    if (prev != NULL)
+        prev->next = new_block;
+    else
+        free_heads[bin] = new_block;
+    if (curr != NULL)
+        curr->prev = new_block;
+
+    return new_block;
 }
 
 /*
  * split - splits a given block in parts, one allocated, one free.
  */
 mem_block_header_t *split(mem_block_header_t *block, size_t new_block_size) {
-	// Optional Student TODO
-	return NULL;
+	size_t originalSize = get_size(block);
+    size_t remainingSize = originalSize - new_block_size;
+
+    block->block_metadata = new_block_size;
+
+    mem_block_header_t *remainder = (mem_block_header_t *)((char *)block + new_block_size);
+    remainder->block_metadata = remainingSize;  // free
+    remainder->next = NULL;
+    remainder->prev = NULL;
+
+    size_t bin = select_bin(remainingSize);
+    mem_block_header_t *curr = free_heads[bin];
+    mem_block_header_t *prev = NULL;
+
+    while (curr != NULL && curr < remainder) {
+        prev = curr;
+        curr = curr->next;
+    }
+
+    remainder->next = curr;
+    remainder->prev = prev;
+    if (prev != NULL)
+        prev->next = remainder;
+    else
+        free_heads[bin] = remainder;
+    if (curr != NULL)
+        curr->prev = remainder;
+
+    return block;
 }
 
 /*
@@ -119,8 +203,12 @@ mem_block_header_t *split(mem_block_header_t *block, size_t new_block_size) {
  * REQUIRED   
  */
 size_t select_bin(size_t size) {
-    // Student TODO
-    return 0;
+    for (size_t i = 0; i < BIN_COUNT - 1; ++i) {
+        if (size <= bin_limits[i]) {
+            return i;
+        }
+    }
+    return BIN_COUNT - 1;
 }
 
 /**
@@ -130,7 +218,10 @@ size_t select_bin(size_t size) {
  * REQUIRED
  */
 void set_bin_limits() {
-    // Student TODO
+    bin_limits[0] = 8;
+    for (int i = 1; i < BIN_COUNT - 1; ++i) {
+        bin_limits[i] = bin_limits[i - 1] * 2;
+    }
 }
 
 /**
@@ -139,8 +230,71 @@ void set_bin_limits() {
  * REQUIRED
  */
 bool coalesce() {
-    // Student TODO
-	return NULL;
+    bool caalesced = false;
+
+    for (size_t i = 0; i < BIN_COUNT; ++i) {
+        mem_block_header_t *curr = free_heads[i];
+        while (curr != NULL) {
+            mem_block_header_t *next_in_mem = (mem_block_header_t *)((char *)curr + get_size(curr));
+            bool found = false;
+            size_t next_bin = select_bin(get_size(next_in_mem));
+            mem_block_header_t *next = free_heads[next_bin];
+            while (next != NULL) {
+                if (next == next_in_mem) {
+                    found = true;
+                    break;
+                }
+                next = next->next;
+            }
+
+            if (found) {
+                // Remove next from its free list
+                if (next_in_mem->prev != NULL) {
+                    next_in_mem->prev->next = next_in_mem->next;
+                } else {
+                    free_heads[next_bin] = next_in_mem->next;
+                }
+                if (next_in_mem->next != NULL) {
+                    next_in_mem->next->prev = next_in_mem->prev;
+                }
+
+                // Remove curr from its current bin
+                if (curr->prev != NULL) {
+                    curr->prev->next = curr->next;
+                } else {
+                    free_heads[i] = curr->next;
+                }
+                if (curr->next != NULL) {
+                    curr->next->prev = curr->prev;
+                }
+
+                // Merge sizes
+                curr->block_metadata = get_size(curr) + get_size(next_in_mem);
+                curr->next = NULL;
+                curr->prev = NULL;
+
+                // Re-insert into correct bin (address-ordered)
+                size_t new_bin = select_bin(get_size(curr));
+                mem_block_header_t *c = free_heads[new_bin];
+                mem_block_header_t *p = NULL;
+                while (c != NULL && c < curr) {
+                    p = c;
+                    c = c->next;
+                }
+                curr->next = c;
+                curr->prev = p;
+                if (p != NULL) p->next = curr;
+                else free_heads[new_bin] = curr;
+                if (c != NULL) c->prev = curr;
+
+                caalesced = true;
+                curr = free_heads[i]; // restart this bin
+            } else {
+                curr = curr->next;
+            }
+        }
+    }
+    return caalesced;
 }
 
 
@@ -150,7 +304,26 @@ bool coalesce() {
  * REQUIRED
  */
 int uinit() {
-    // Student TODO
+    for (int i = 0; i < BIN_COUNT; i++) {
+        free_heads[i] = NULL;
+    }
+    
+    set_bin_limits();
+
+
+    mem_block_header_t* initial_block = csbrk(PAGESIZE);
+    if (initial_block == NULL) {
+        return -1;
+    }
+
+
+    initial_block->block_metadata = PAGESIZE;
+    initial_block->next = NULL;
+    initial_block->prev = NULL;
+
+    size_t bin = select_bin(PAGESIZE);
+    free_heads[bin] = initial_block;
+
     return 0;
 }
 
@@ -159,9 +332,40 @@ int uinit() {
  * REQUIRED
  */
 void *umalloc(size_t size) {
-	// Student TODO
-    return NULL;
+	if (size == 0) {
+        return NULL;
+    }
+    size_t totalSize = calcSize(size);
+    mem_block_header_t* block = find(totalSize);
+
+    if (block == NULL) {
+        block = extend(totalSize);
+        if (block == NULL) {
+            return NULL;
+        }
+    }
+
+    size_t bin = select_bin(get_size(block));
+
+    if (block->prev != NULL) {
+        block->prev->next = block->next;
+    } else {
+        free_heads[bin] = block->next; // first block of bin
+    }
+
+    if (block->next != NULL) {
+        block->next->prev = block->prev;
+    }
+
+    size_t blockSize = get_size(block);
+    size_t minSize = sizeof(mem_block_header_t) + ALIGNMENT; 
+    if (blockSize >= totalSize + minSize) {
+        split(block, totalSize);
+    }
+    allocate(block);
+    return get_payload(block);
 }
+
 
 /**
  * ufree - frees the memory space pointed to by ptr.
@@ -170,5 +374,33 @@ void *umalloc(size_t size) {
  * REQUIRED
  */
 void ufree(void *ptr) {
-    // Student TODO
+    if (ptr == NULL) {
+        return;
+    }
+    mem_block_header_t *block = get_header(ptr);
+    deallocate(block);
+
+    size_t size = get_size(block);
+    size_t bin = select_bin(size);
+
+    mem_block_header_t* curr = free_heads[bin];
+    mem_block_header_t* prev = NULL;
+
+    while (curr != NULL && curr < block) {
+        prev = curr;
+        curr = curr->next;
+    }
+
+    block->next = curr;
+    block->prev = prev;
+    if (prev != NULL) {
+        prev->next = block;
+    } else {
+        free_heads[bin] = block; // first block of bin
+    }
+    
+    if (curr != NULL) {
+        curr->prev = block;
+    }
+
 }

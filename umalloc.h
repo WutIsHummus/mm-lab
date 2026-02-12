@@ -18,22 +18,23 @@ typedef struct mem_block_header_struct {
     size_t block_metadata; // This field stores the representation of the block size in bits [63:4],
                             // and allocation status in bit 0
     struct mem_block_header_struct *next;
+    struct mem_block_header_struct *prev;
+    size_t _padding; // Pad to 32 bytes so payload is 16-byte aligned
 } mem_block_header_t;
 
-// Helper Functions. Their parameters may be edited if you change their 
-// signature in umalloc.c. Do not change their purpose.
-bool is_allocated(mem_block_header_t *block);
+// Helper Functions — camelCase, const-correct where pure.
+bool isAllocated(const mem_block_header_t *block);
 void allocate(mem_block_header_t *block);
 void deallocate(mem_block_header_t *block);
-size_t get_size(mem_block_header_t *block);
-mem_block_header_t *get_next(mem_block_header_t *block);
-void *get_payload(mem_block_header_t *block);
-mem_block_header_t *get_header(void *payload);
+size_t getSize(const mem_block_header_t *block);
+mem_block_header_t *getNext(const mem_block_header_t *block);
+void *getPayload(const mem_block_header_t *block);
+mem_block_header_t *getHeader(void *payload);
 
-void set_block_metadata(mem_block_header_t *block, size_t size, bool alloc);
-mem_block_header_t *find(size_t size);
+void setBlockMetadata(mem_block_header_t *block, size_t size, bool alloc);
+mem_block_header_t *find(size_t totalSize);
 mem_block_header_t *extend(size_t size);
-mem_block_header_t *split(mem_block_header_t *block, size_t size);
+mem_block_header_t *split(mem_block_header_t *block, size_t newBlockSize);
 
 // Portion that may not be edited
 size_t select_bin(size_t size);
