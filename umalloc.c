@@ -108,17 +108,16 @@ void set_block_metadata(mem_block_header_t *block, size_t size, bool alloc) {
 mem_block_header_t *find(size_t total_size) {
 	size_t bin = select_bin(total_size);
 
-    for (size_t i = bin; i < BIN_COUNT; i++) {
-        mem_block_header_t *curr = free_heads[i];
-        while (curr != NULL) {
-            if (get_size(curr) >= total_size) {
-                return curr;
+    for (int i = bin; i < BIN_COUNT; i++){
+        mem_block_header_t *cur = free_heads[i];
+        while (cur){
+            if (get_size(cur) >= total_size){
+                return cur;
             }
-            curr = curr->next;
+            cur = cur->next;
         }
     }
-
-	return NULL;
+    return NULL;
 }
 
 /*
@@ -128,69 +127,84 @@ mem_block_header_t *extend(size_t size) {
     size_t alloc_size = size > PAGESIZE ? size : PAGESIZE;
     alloc_size = ((alloc_size + PAGESIZE - 1) / PAGESIZE) * PAGESIZE;
 
-    mem_block_header_t *new_block = csbrk(alloc_size);
-    if (new_block == NULL) {    
+    mem_block_header_t *newBlock = csbrk(alloc_size);
+    if (newBlock == NULL){
         return NULL;
     }
 
-    new_block->block_metadata = alloc_size;
-    new_block->next = NULL;
-    new_block->prev = NULL;
+    newBlock->block_metadata = alloc_size;
+    newBlock->next = NULL;
+    newBlock->prev = NULL;
 
     size_t bin = select_bin(alloc_size);
-    mem_block_header_t *curr = free_heads[bin];
-    mem_block_header_t *prev = NULL;
 
-    while (curr != NULL && curr < new_block) {
-        prev = curr;
-        curr = curr->next;
+    mem_block_header_t* cur = free_heads[bin];
+    mem_block_header_t* prev = NULL;
+
+    while (cur != NULL && cur < newBlock){
+        prev = cur;
+        cur = cur->next;
     }
 
-    new_block->next = curr;
-    new_block->prev = prev;
-    if (prev != NULL)
-        prev->next = new_block;
-    else
-        free_heads[bin] = new_block;
-    if (curr != NULL)
-        curr->prev = new_block;
 
-    return new_block;
+    newBlock->next = cur;
+    newBlock->prev = prev;
+
+    if (cur) {
+        cur->prev = newBlock;
+    }
+
+    if (prev) {
+        prev->next = newBlock;
+    }
+    else {
+        free_heads[bin] = newBlock;
+    }
+
+    return newBlock;
 }
 
 /*
  * split - splits a given block in parts, one allocated, one free.
  */
 mem_block_header_t *split(mem_block_header_t *block, size_t new_block_size) {
-	size_t originalSize = get_size(block);
-    size_t remainingSize = originalSize - new_block_size;
+    size_t oldSize = get_size(block);
+    size_t remainingSize = oldSize - new_block_size;
 
     block->block_metadata = new_block_size;
 
-    mem_block_header_t *remainder = (mem_block_header_t *)((char *)block + new_block_size);
-    remainder->block_metadata = remainingSize;  // free
-    remainder->next = NULL;
-    remainder->prev = NULL;
+    mem_block_header_t* newBlock = (mem_block_header_t*) ((char*) block + new_block_size);
+
+    newBlock->block_metadata = remainingSize;
+    newBlock->next = NULL;
+    newBlock->prev = NULL;
 
     size_t bin = select_bin(remainingSize);
-    mem_block_header_t *curr = free_heads[bin];
-    mem_block_header_t *prev = NULL;
 
-    while (curr != NULL && curr < remainder) {
-        prev = curr;
-        curr = curr->next;
+    mem_block_header_t* cur = free_heads[bin];
+    mem_block_header_t* prev = NULL;
+
+    while (cur != NULL && newBlock < cur){
+        prev = cur;
+        cur = cur->next;
     }
 
-    remainder->next = curr;
-    remainder->prev = prev;
-    if (prev != NULL)
-        prev->next = remainder;
-    else
-        free_heads[bin] = remainder;
-    if (curr != NULL)
-        curr->prev = remainder;
 
-    return block;
+    newBlock->next = cur;
+    newBlock->prev = prev;
+
+    if (cur) {
+        cur->prev = newBlock;
+    }
+
+    if (prev) {
+        prev->next = newBlock;
+    }
+    else {
+        free_heads[bin] = newBlock;
+    }
+
+    return newBlock;
 }
 
 /*
@@ -218,10 +232,11 @@ size_t select_bin(size_t size) {
  * REQUIRED
  */
 void set_bin_limits() {
-    bin_limits[0] = 8;
-    for (int i = 1; i < BIN_COUNT - 1; ++i) {
-        bin_limits[i] = bin_limits[i - 1] * 2;
-    }
+    bin_limits[0] = 64;
+    bin_limits[1] = 128;
+    bin_limits[2] = 256;
+    bin_limits[3] = 512;
+    bin_limits[4] = 1024;
 }
 
 /**
@@ -229,72 +244,92 @@ void set_bin_limits() {
  * returns false if no coalesce is done at all, else return true
  * REQUIRED
  */
+
+static int addr_cmp(const void *a, const void *b) {
+    mem_block_header_t *const *pa = a;
+    mem_block_header_t *const *pb = b;
+    if (*pa < *pb) return -1;
+    if (*pa > *pb) return  1;
+    return 0;
+}
+
 bool coalesce() {
-    bool caalesced = false;
-
-    for (size_t i = 0; i < BIN_COUNT; ++i) {
-        mem_block_header_t *curr = free_heads[i];
-        while (curr != NULL) {
-            mem_block_header_t *next_in_mem = (mem_block_header_t *)((char *)curr + get_size(curr));
-            bool found = false;
-            size_t next_bin = select_bin(get_size(next_in_mem));
-            mem_block_header_t *next = free_heads[next_bin];
-            while (next != NULL) {
-                if (next == next_in_mem) {
-                    found = true;
-                    break;
-                }
-                next = next->next;
-            }
-
-            if (found) {
-                // Remove next from its free list
-                if (next_in_mem->prev != NULL) {
-                    next_in_mem->prev->next = next_in_mem->next;
-                } else {
-                    free_heads[next_bin] = next_in_mem->next;
-                }
-                if (next_in_mem->next != NULL) {
-                    next_in_mem->next->prev = next_in_mem->prev;
-                }
-
-                // Remove curr from its current bin
-                if (curr->prev != NULL) {
-                    curr->prev->next = curr->next;
-                } else {
-                    free_heads[i] = curr->next;
-                }
-                if (curr->next != NULL) {
-                    curr->next->prev = curr->prev;
-                }
-
-                // Merge sizes
-                curr->block_metadata = get_size(curr) + get_size(next_in_mem);
-                curr->next = NULL;
-                curr->prev = NULL;
-
-                // Re-insert into correct bin (address-ordered)
-                size_t new_bin = select_bin(get_size(curr));
-                mem_block_header_t *c = free_heads[new_bin];
-                mem_block_header_t *p = NULL;
-                while (c != NULL && c < curr) {
-                    p = c;
-                    c = c->next;
-                }
-                curr->next = c;
-                curr->prev = p;
-                if (p != NULL) p->next = curr;
-                else free_heads[new_bin] = curr;
-                if (c != NULL) c->prev = curr;
-
-                caalesced = true;
-                curr = free_heads[i]; // restart this bin
-            } else {
-                curr = curr->next;
-            }
+    int total = 0;
+    for (int i = 0; i < BIN_COUNT; ++i) {
+        for (mem_block_header_t *c = free_heads[i]; c; c = c->next){
+            total++;
         }
     }
-    return caalesced;
+
+    if (total < 2) return false; // sad non to merge
+
+    mem_block_header_t *blocks[total];
+    int idx = 0;
+    for (int i = 0; i < BIN_COUNT; ++i){
+        for (mem_block_header_t *c = free_heads[i]; c; c = c->next){
+             blocks[idx++] = c;
+        }
+    }
+
+    // built in sort wow
+    qsort(blocks, total, sizeof(blocks[0]), addr_cmp);
+
+
+    for (int i = 0; i < BIN_COUNT; ++i){
+        free_heads[i] = NULL;
+    }
+
+    // merge adjacent
+    bool coalesced = false;
+    int i = 0;
+    while (i < total) {
+        mem_block_header_t *block = blocks[i];
+        size_t size = get_size(block);
+
+        int j = i + 1;
+
+        while (j < total) {
+            if ((char *)block + size == (char *)blocks[j]) {
+                size += get_size(blocks[j]);
+                coalesced = true;
+                j++;
+            } else {
+                break;
+            }
+        }
+
+        block->block_metadata = size;
+        block->next = NULL;
+        block->prev = NULL;
+
+        size_t bin = select_bin(size);
+
+        mem_block_header_t* cur = free_heads[bin];
+        mem_block_header_t* prev = NULL;
+
+        while (cur != NULL && cur < block){
+            prev = cur;
+            cur = cur->next;
+        }
+
+        block->next = cur;
+        block->prev = prev;
+
+        if (cur) {
+            cur->prev = block;
+        }
+
+        if (prev) {
+            prev->next = block;
+        }
+        else {
+            free_heads[bin] = block;
+        }
+
+        i = j;
+    }
+
+    return coalesced;
 }
 
 
@@ -338,10 +373,15 @@ void *umalloc(size_t size) {
     size_t totalSize = calcSize(size);
     mem_block_header_t* block = find(totalSize);
 
-    if (block == NULL) {
-        block = extend(totalSize);
+    if (block == NULL) { 
+        if (coalesce()) {
+            block = find(totalSize);
+        }
         if (block == NULL) {
-            return NULL;
+            block = extend(totalSize);
+            if (block == NULL) {
+                return NULL;
+            }
         }
     }
 
@@ -358,7 +398,7 @@ void *umalloc(size_t size) {
     }
 
     size_t blockSize = get_size(block);
-    size_t minSize = sizeof(mem_block_header_t) + ALIGNMENT; 
+    size_t minSize = sizeof(mem_block_header_t); 
     if (blockSize >= totalSize + minSize) {
         split(block, totalSize);
     }
